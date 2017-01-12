@@ -36,6 +36,10 @@ Procedure for filling completely filling internal nodata
 5. Have a separate script spatially lookup all 1st pass outputs and put
    2nd pass outputs into it
 
+* It may turn out to be really slow to address each void sequentially. It might
+be possible to speed up by processing no overlapping void aggregations in
+batches.
+
 Creating streamlines
 --------------------
 

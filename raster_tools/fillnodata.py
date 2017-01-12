@@ -1,17 +1,12 @@
 # (c) Nelen & Schuurmans, see LICENSE.rst.
 # -*- coding: utf-8 -*-
 """
-This script is the basis for a seamless void-filling procedure for large
-coverages. The main principle is to aggregate the raster per quad of
-pixels and repeat until only one pixel is left, and then zooming back
-in and smoothing at each zoom step.
+Fills nodata in a raster, partitioning the work by geometries supplied via
+shapefile, writing the output in a separate rasters.
 
-Optionally a limiting ceiling raster can be supplied to cut the recursion
-at an earlier zomlevel. This should be a preaggregated, void-less
-dataset. This ceiling dataset can be created from the original dataset
-using the aggregate script based on an even tiling (generated with the
-reindex script). The results can then be merged using gdal_merge.py and
-filled using this script.
+The main principle is to aggregate the raster per quad of pixels and repeat
+until only one pixel is left, and then zooming back in and smoothing at each
+zoom step.
 """
 
 from __future__ import print_function
@@ -31,6 +26,7 @@ from raster_tools import utils
 from raster_tools import gdal
 
 GTIF = gdal.GetDriverByName(str('gtiff'))
+SHAPE = ogr.GetDriverByName(str('esri shapefile'))
 OPTIONS = ['compress=deflate', 'tiled=yes']
 KERNEL = np.array([[0.0625, 0.1250,  0.0625],
                    [0.1250, 0.2500,  0.1250],
@@ -47,11 +43,11 @@ def smooth(values):
     return ndimage.correlate(values, KERNEL)
 
 
-def fill(values, no_data_value, ceiling):
+def fill(values, no_data_value):
     """
-    Fill must return a filled array. It does so by aggregating, requesting
-    a fill for that, and zooming back. After zooming back, it smooths
-    the filled values and returns.
+    Fill must return a filled array. It does so by aggregating, requesting a
+    fill for that (so this is a recursive thing), and zooming back. After
+    zooming back, it smooths the filled values and returns.
     """
     mask = values == no_data_value
     if not mask.any():
@@ -60,12 +56,9 @@ def fill(values, no_data_value, ceiling):
 
     # aggregate
     aggregated_shape = values.shape[0] / 2, values.shape[1] / 2
-    if ceiling is not None and ceiling.shape == aggregated_shape:
-        aggregated = {'values': ceiling, 'no_data_value': no_data_value}
-    else:
-        aggregated = utils.aggregate_uneven(func='mean',
-                                            values=values,
-                                            no_data_value=no_data_value)
+    aggregated = utils.aggregate_uneven(func='mean',
+                                        values=values,
+                                        no_data_value=no_data_value)
 
     filled = fill(ceiling=ceiling, **aggregated)
     zoomed = zoom(filled)[:values.shape[0], :values.shape[1]]
@@ -73,31 +66,38 @@ def fill(values, no_data_value, ceiling):
 
 
 class Filler(object):
-    def __init__(self, source_path, ceiling_path):
+    def __init__(self, source_path, target_path, single=True):
+        """ 
+        If edges_path is given, write edge void geometries to a shapefile.
+        Otherwise process only a single void spanning the whole geometry.
+        """
         # source group
         self.source = groups.Group(gdal.Open(source_path))
+        self.target_path = target_path
 
-        # ceiling group
-        if ceiling_path:
-            self.ceiling = groups.Group(gdal.Open(ceiling_path))
-        else:
-            self.ceiling = None
+    def fill(self, feature):
+        """
+        Return dictionary with data and no data value of filling.
+        Write filled raster and edge shapes to target directory.
+        """
+        # target path
+        name = feature[str('name')]
+        root_path = os.path.join(self.target_path, name[:3], name)
+        tif_path = root_path + '.tif'
+        shp_path = root_path + '.shp'
+        
+        if os.path.exists(tif_path):
+            continue
 
-    def fill(self, geometry):
-        """ Return dictionary with data and no data value of filling. """
+        # create directory
+        try:
+            os.makedirs(os.path.dirname(path))
+        except OSError:
+            pass  # no problem
+
         values = self.source.read(geometry)
         no_data_value = self.source.no_data_value
-        if self.ceiling:
-            ceiling = self.ceiling.read(geometry)
-            if (ceiling == self.ceiling.no_data_value).any():
-                # triggers infinite recursion or gives undesired results
-                result = np.full_like(values, no_data_value)
-                return {'values': result, 'no_data_value': no_data_value}
-        else:
-            ceiling = None
-        result = fill(values=values,
-                      ceiling=ceiling,
-                      no_data_value=no_data_value)
+        result = fill(values=values, no_data_value=no_data_value)
         result[values != no_data_value] = no_data_value
         return {'values': result, 'no_data_value': no_data_value}
 
@@ -120,6 +120,57 @@ def fillnodata(source_path, target_path, ceiling_path):
     with datasets.Dataset(**kwargs) as dataset:
         GTIF.CreateCopy(target_path, dataset, options=OPTIONS)
 
+def fillnodata(feature_path, source_path, target_path, single, part):
+    """
+    """
+    # select some or all polygons
+    features = datasources.PartialDataSource(features_path)
+    if part is not None:
+        features = features.select(part)
+
+    filler = Filler(source_path=source_path)
+
+    for feature in features:
+        # target path
+        name = feature[str('name')]
+        path = os.path.join(output_path, name[:2], '{}.tif'.format(name))
+        if os.path.exists(path):
+            continue
+
+        # create directory
+        try:
+            os.makedirs(os.path.dirname(path))
+        except OSError:
+            pass  # no problem
+
+        # geometries
+        inner_geometry = feature.geometry()
+        outer_geometry = inner_geometry.Buffer(32, 1)
+
+        # geo transforms
+        geo_transform = filler.source.geo_transform
+        inner_geo_transform = geo_transform.shifted(inner_geometry)
+        outer_geo_transform = geo_transform.shifted(outer_geometry)
+
+        # fill
+        result = filler.fill(outer_geometry)
+
+        # cut out
+        slices = outer_geo_transform.get_slices(inner_geometry)
+        values = result['values'][slices]
+        no_data_value = result['no_data_value']
+        if np.equal(values, no_data_value).all():
+            continue
+
+        # save
+        options = ['compress=deflate', 'tiled=yes']
+        kwargs = {'projection': filler.source.projection,
+                  'geo_transform': inner_geo_transform,
+                  'no_data_value': no_data_value.item()}
+
+        with datasets.Dataset(values[np.newaxis], **kwargs) as dataset:
+            GTIF.CreateCopy(path, dataset, options=options)
+
 
 def get_parser():
     """ Return argument parser. """
@@ -127,20 +178,34 @@ def get_parser():
         description=__doc__
     )
     parser.add_argument(
+        'feature_path',
+        metavar='FEATURES',
+        help='shapefile with geometries and names of output tiles',
+    )
+    parser.add_argument(
         'source_path',
         metavar='RASTER',
         help='source GDAL raster dataset with voids'
     )
     parser.add_argument(
-        'target_path',
+        'output_path',
         metavar='OUTPUT',
-        help='target GDAL raster without voids',
+        help='output folder for rasters containing the fillings',
     )
     parser.add_argument(
-        '--ceiling', '-c',
-        metavar='CEILING',
-        dest='ceiling_path',
-        help='preaggregated GDAL ceiling raster without voids',
+        '-s', '--single',
+        action='store_true',
+        help='Only process one matching void per feature - implies 2nd pass',
+    )
+    parser.add_argument(
+        '-a', '--aggregation',
+        dest='func',
+        default='min',
+        help='statistic to use per pixel quad prior to smoothing',
+    )
+    parser.add_argument(
+        '-p', '--part',
+        help='partial processing source, for example "2/3"',
     )
     return parser
 

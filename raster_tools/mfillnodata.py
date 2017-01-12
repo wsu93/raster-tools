@@ -19,7 +19,7 @@ from raster_tools import datasets
 from raster_tools import datasources
 
 from raster_tools import fillnodata
-from raster_tools import gdal
+from osgeo import gdal
 
 GTIF = gdal.GetDriverByName(str('gtiff'))
 
