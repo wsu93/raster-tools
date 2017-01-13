@@ -69,16 +69,16 @@ def aggregate_uneven(values, no_data_value, func='mean'):
         return aggregate(values, **kwargs)
 
     # 4-step: a) even section, b) bottom, c) right and d) corner
-    result = np.empty(((s1 + p1) / 2, (s2 + p2) / 2), dtype=values.dtype)
+    result = np.empty(((s1 + p1) // 2, (s2 + p2) // 2), dtype=values.dtype)
     # the even section
     a = aggregate(values[:s1 - p1, :s2 - p2], **kwargs)
-    result[:(s1 - p1) / 2, :(s2 - p2) / 2] = a['values']
+    result[:(s1 - p1) // 2, :(s2 - p2) // 2] = a['values']
     if p1:  # bottom row
         b = aggregate(values[-1:, :s2 - p2].repeat(2, axis=0), **kwargs)
-        result[-1:, :(s2 - p2) / 2] = b['values']
+        result[-1:, :(s2 - p2) // 2] = b['values']
     if p2:   # right column
         c = aggregate(values[:s1 - p1, -1:].repeat(2, axis=1), **kwargs)
-        result[:(s1 - p1) / 2:, -1:] = c['values']
+        result[:(s1 - p1) // 2:, -1:] = c['values']
     if p1 and p2:  # corner pixel
         result[-1, -1] = values[-1, -1]
     return {'values': result, 'no_data_value': no_data_value}
@@ -89,6 +89,17 @@ class GeoTransform(tuple):
         """First argument must be a 6-tuple defining a geotransform."""
         super(GeoTransform, self).__init__(geo_transform_tuple)
 
+    def rebased(self, origin)
+        """
+        Return rebased geo transform.
+
+        :param origin: index tuple to new origin
+        """
+        p, a, b, q, c, d = self
+        i, j = origin
+        return self.__class__([p + a * j + b * i, a, b,
+                               q + c * j + d * i, c, d])
+    
     def shifted(self, geometry, inflate=False):
         """
         Return shifted geo transform.
@@ -96,10 +107,8 @@ class GeoTransform(tuple):
         :param geometry: geometry to match
         :param inflate: inflate to nearest top-left grid intersection.
         """
-        values = list(self)
-        index = self.get_indices(geometry, inflate=inflate)[1::-1]
-        values[0], values[3] = self.get_coordinates(index)
-        return self.__class__(values)
+        origin = self.get_indices(geometry, inflate=inflate)[1::-1]
+        return self.rebased(origin)
 
     def scaled(self, f):
         """

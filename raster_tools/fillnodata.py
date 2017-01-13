@@ -30,6 +30,7 @@ from osgeo import gdal
 from osgeo import ogr
 
 TIF = gdal.GetDriverByName(str('GTiff'))
+MEM = ogr.GetDriverByName(str('Memory'))
 SHP = ogr.GetDriverByName(str('ESRI Shapefile'))
 
 OPTIONS = ['compress=deflate', 'tiled=yes']
@@ -71,73 +72,68 @@ def fill(func, values, no_data_value):
 
 
 class BaseExtractor(object):
-    
-    INTERIOR = 1
-    EXTERIOR = 2
+    """ Extract objects from a void mask. """
 
-    def __init__(self):
-        self.values = values
-        self.no_data_value = no_data_value
-        
-        mask = (values == no_data_value)
-        if mask.all():
-            raise ValueError('All values are no data.')
+    def __init__(self, mask):
+        self.label, total = ndimage.label(mask)
+        self.objects = ndimage.find_objects(self.label)
 
-        self.label, self.total = ndimage.label(mask)
-        objects = ndimage.find_objects(self.label)
-    
     def grow(self, slices):
-        """ Grow slices by one, but do not exceed shape dims. """
-        if s1 == 0
-        return tuple(slice(
-            max(0, s.start - 1),
-            min(l, s.stop + 1))
-            for s, l in zip(slices, self.shape))
+        """
+        Return slices, limited.
+
+        :param slices: 2-tuple of slice objects
+
+        The result is a 2-tuple of grown slice objects. Limited is a boolean
+        indicating whether growth was limited by one or more array edges.
+        """
+        h, w = self.label.shape
+        y1, y2, x1, x2 = (slices[0].start, slices[0].stop,
+                          slices[1].start, slices[1].stop)
+
+        Y1 = max(0, y1 - 1)
+        Y2 = min(h, y2 + 1)
+        X1 = max(0, x1 - 1)
+        X2 = min(w, x2 + 1)
+
+        slices = (slice(Y1, Y2), slice(X1, X2))
+        limited = (y1 == Y1 or y2 == Y2 or x1 == X1 or x2 == X2)
+
+        return slices, limited
+
+    def get_interior_objects(self):
+        """ Return slices, void, edge. """
+        for slices, label in self.interior_objects:
+            void = self.label[slices] == label
+            edge = ndimage.binary_dilation(void) - void
+            yield slices, void, edge
 
 
-
-class MultiExtractor(object):
-
-    def __init__(self, values, no_data_value):
-        super(SingleExtractor, self).__init__()
-
-        # split interior and exterior objects
-        self.internal_objects = []
-        self.external_objects = []
-
-        for count, slices in enumerate(objects, 1):
-            x1, x2, y1, y2 = (
-                slices[1].start,
-                slices[1].stop,
-                slices[0].start,
-                slices[0].stop,
-            )
-            if x1 == 0 or y1 == 0 or x2 == width or y2 == height:
-                # write including edge. Is that possible?
-                continue
-            import ipdb
-            ipdb.set_trace() 
-            slices = grower.grow(slices)
-
-            # determine edges
-            # create work array with only edges
-            # fill void and write into result array
-
-    def get_external_objects(self)
-        # if self.single:
-            # slices = slice(1, height - 1), slice(1, width -1)
-            # index = objects.index(slices) + 1
-            # void = (label == index)
-
-        yield {
-            'id':
-            'slices':
+class MultiExtractor(BaseExtractor):
+    def __init__(self, *args, **kwargs):
+        super(MultiExtractor, self).__init__(*args, **kwargs)
+        # split interior and exterior objects in lists of (slices,
+        # label)-tuples
+        self.interior_objects = []
+        self.exterior_objects = []
+        for label, slices in enumerate(self.objects, 1):
+            slices, limited = self.grow(slices)
+            if limited:
+                self.exterior_objects.append((slices, label))
+            else:
+                self.interior_objects.append((slices, label))
 
 
-    def get_internal_objects(self)
-        yield 
-
-    def get_single_object(self)
+class SingleExtractor(BaseExtractor):
+    def __init__(self, *args, **kwargs):
+        super(SingleExtractor, self).__init__(*args, **kwargs)
+        # find the main object in the list of objects
+        height, width = self.label.shape
+        slices = slice(1, height - 1), slice(1, width - 1)
+        label = self.objects.index(slices)
+        slices = self.grow(slices)[0]
+        self.interior_objects = [(slices, label)]
+        self.exterior_objects = []
 
 
 class Filler(object):
@@ -148,50 +144,96 @@ class Filler(object):
     affecting both fillings.
     """
     def __init__(self, source_path, target_path, func, single):
-        """ 
+        """
         If edges_path is given, write edge void geometries to a shapefile.
         Otherwise process only a single void spanning the whole geometry.
         """
-        # source group
+        self.Extractor = SingleExtractor if single else MultiExtractor
         self.source = groups.Group(gdal.Open(source_path))
         self.target_path = target_path
+        self.single = single
+        self.func = func
 
     def fill(self, feature):
         """
         Write filled raster and edge shapes to target directory.
         """
-        # target path
+        # determine path
         name = feature[str('unit')]
         root = join(self.target_path, name[:3], name)
-        path = root + 'tif'
-        
+        path = root + '.tif'
         if exists(path):
             return
 
         # retrieve data
-        values = self.source.read(feature.geometry())
+        geometry = feature.geometry()
+        geo_transform = self.source.geo_transform.shifted(geometry)
+        values = self.source.read(geometry)
         no_data_value = self.source.no_data_value
-        try:
-            extractor = Extractor(values=values, no_data_value=no_data_value)
-        except ValueError:
-            return  # all values are no data
-        
+        mask = (values == no_data_value)
+        if mask.all():
+            return
+
+        extractor = self.Extractor(mask)
+
+        # part one - filling of interior voids
         result = np.full_like(values, no_data_value)
+        for slices, void, edge in extractor.get_interior_objects():
+            break
+            work = values[slices].copy()
+            work[~edge] = no_data_value
+            filled = fill(func=func, values=work, no_data_value=no_data_value)
+            result[slices][void] = filled[void]
 
         # create directory
         try:
             os.makedirs(dirname(path))
         except OSError:
             pass  # no problem
-        # write tiff
-        # kwargs = {'projection': source_dataset.GetProjection(),
-                  # 'geo_transform': source_dataset.GetGeoTransform()}
-        # kwargs['array'] = result['values'][np.newaxis]
-        # kwargs['no_data_value'] = result['no_data_value'].item()
-        # with datasets.Dataset(**kwargs) as dataset:
-            # GTIF.CreateCopy(path, dataset, options=OPTIONS)
 
+        # write tiff
+        kwargs = {
+            'geo_transform': geo_transform,
+            'projection': self.source.projection,
+            'no_data_value': no_data_value.item(),
+        }
+        array = result[np.newaxis]
+        with datasets.Dataset(array, **kwargs) as dataset:
+            TIF.CreateCopy(path, dataset, options=OPTIONS)
+
+        if self.single:
+            return
+        
+        # part two - keeping track of exterior voids
+        result = MEM.CreateDataSource(str(''))
+        layer = result.CreateLayer(sr=geometry.GetSpatialReference())
+        layer_defn = layer.GetLayerDefn()
+        field_defn = ogr.FieldDefn(str('unit'), ogr.OFTString)
+        kwargs = {
+            'projection': self.source.projection,
+            'no_data_value': 0,
+        }
+        for slices, void, edge in extractor.get_exterior_objects():
+            origin = slices[0].start, slices[1].start
+            kwargs['geo_transform'] = geo_transform.rebased(origin)
+            array = np.uint8(void | edge)[np.newaxis]
+            with datasets.Dataset(array, **kwargs) as dataset:
+                band = dataset.GetRasterBand(1)
+                gdal.Polygonize(band, band, layer)
+            
         # write shape
+        SHP.CreateCopy(layer, 
+        kwargs = {
+            'projection': self.source.projection,
+            'no_data_value': no_data_value.item(),
+            'geo_transform': self.source.geo_transform.shifted(geometry),
+        }
+        array = result[np.newaxis]
+        with datasets.Dataset(array, **kwargs) as dataset:
+            TIF.CreateCopy(path, dataset, options=OPTIONS)
+
+
+        
 
 
 def fillnodata(feature_path, part, **kwargs):
