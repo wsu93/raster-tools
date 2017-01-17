@@ -89,7 +89,7 @@ class GeoTransform(tuple):
         """First argument must be a 6-tuple defining a geotransform."""
         super(GeoTransform, self).__init__(geo_transform_tuple)
 
-    def rebased(self, origin)
+    def rebased(self, origin):
         """
         Return rebased geo transform.
 
@@ -99,7 +99,7 @@ class GeoTransform(tuple):
         i, j = origin
         return self.__class__([p + a * j + b * i, a, b,
                                q + c * j + d * i, c, d])
-    
+
     def shifted(self, geometry, inflate=False):
         """
         Return shifted geo transform.

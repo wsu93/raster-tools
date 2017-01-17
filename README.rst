@@ -38,7 +38,32 @@ Procedure for filling completely filling internal nodata
 
 * It may turn out to be really slow to address each void sequentially. It might
 be possible to speed up by processing no overlapping void aggregations in
-batches.
+batches. Use the extractor to group non-interfering voids for this.
+
+** Lare voids can be processed incrementally as long as a large enough buffer
+is present.
+
+Or - totally different approach. Spatial recursion. Large void, dwell in higher
+recursion and fill targets incrementally using index. No partial stuff.
+
+If we could write an array with all voids and edges within some aggregated quad
+hierarchy, they could all be processed batchwise without interference.
+
+- find all voids
+- Save all pixels
+- Handle small voids immediately
+- Handle large voids as sparse array in
+? Handle large voids:
+    - Save as sparse array
+    - Do aggregation as sparse arrays
+    - Do smoothing batchwise:
+        - zoom in, smooth, paste lower levels - rinse repeat
+        - 
+
+
+- grow slices
+- determine bboxes
+
 
 Creating streamlines
 --------------------

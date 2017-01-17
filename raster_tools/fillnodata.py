@@ -101,12 +101,18 @@ class BaseExtractor(object):
 
         return slices, limited
 
-    def get_interior_objects(self):
+    def get_objects(self, objects):
         """ Return slices, void, edge. """
-        for slices, label in self.interior_objects:
+        for slices, label in objects:
             void = self.label[slices] == label
             edge = ndimage.binary_dilation(void) - void
             yield slices, void, edge
+
+    def get_interior_objects(self):
+        return self.get_objects(self.interior_objects)
+
+    def get_exterior_objects(self):
+        return self.get_objects(self.exterior_objects)
 
 
 class MultiExtractor(BaseExtractor):
@@ -177,6 +183,7 @@ class Filler(object):
         extractor = self.Extractor(mask)
 
         # part one - filling of interior voids
+        func = self.func
         result = np.full_like(values, no_data_value)
         for slices, void, edge in extractor.get_interior_objects():
             break
@@ -203,37 +210,30 @@ class Filler(object):
 
         if self.single:
             return
-        
+
         # part two - keeping track of exterior voids
-        result = MEM.CreateDataSource(str(''))
-        layer = result.CreateLayer(sr=geometry.GetSpatialReference())
-        layer_defn = layer.GetLayerDefn()
+        data_source = MEM.CreateDataSource(str(''))
+        layer = data_source.CreateLayer(
+            str(name),
+            srs=geometry.GetSpatialReference(),
+        )
         field_defn = ogr.FieldDefn(str('unit'), ogr.OFTString)
+        layer.CreateField(field_defn)
         kwargs = {
-            'projection': self.source.projection,
             'no_data_value': 0,
+            'projection': self.source.projection,
         }
         for slices, void, edge in extractor.get_exterior_objects():
             origin = slices[0].start, slices[1].start
             kwargs['geo_transform'] = geo_transform.rebased(origin)
-            array = np.uint8(void | edge)[np.newaxis]
+            # array = np.uint8(void | edge)[np.newaxis]
+            array = np.uint8(void)[np.newaxis]
             with datasets.Dataset(array, **kwargs) as dataset:
                 band = dataset.GetRasterBand(1)
-                gdal.Polygonize(band, band, layer)
-            
+                gdal.Polygonize(band, band, layer, 0)
+
         # write shape
-        SHP.CreateCopy(layer, 
-        kwargs = {
-            'projection': self.source.projection,
-            'no_data_value': no_data_value.item(),
-            'geo_transform': self.source.geo_transform.shifted(geometry),
-        }
-        array = result[np.newaxis]
-        with datasets.Dataset(array, **kwargs) as dataset:
-            TIF.CreateCopy(path, dataset, options=OPTIONS)
-
-
-        
+        SHP.CreateDataSource(root + '.shp').CopyLayer(layer, name)
 
 
 def fillnodata(feature_path, part, **kwargs):
