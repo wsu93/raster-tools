@@ -27,33 +27,13 @@ Creating a seamless large-scale void-filled raster (deprecated)
 
 Procedure for filling completely filling internal nodata
 --------------------------------------------------------
-1. Make VRT of all source rasters
-2. Create filled rasters using fillnodata using source (1st pass)
-    - use units shape for partitioning
-    - keep edge geometries (an attribute for unit names?)
-3. Dissolve edge geometries and give them proper names
-4. Create filled rasters for the dissolved edge geometries (2nd pass)
-5. Have a separate script spatially lookup all 1st pass outputs and put
-   2nd pass outputs into it
-
-* It may turn out to be really slow to address each void sequentially. It might
-be possible to speed up by processing no overlapping void aggregations in
-batches. Use the extractor to group non-interfering voids for this.
-
-** Lare voids can be processed incrementally as long as a large enough buffer
-is present.
-
-Or - totally different approach. Spatial recursion. Large void, dwell in higher
-recursion and fill targets incrementally using index. No partial stuff.
-
-If we could write an array with all voids and edges within some aggregated quad
-hierarchy, they could all be processed batchwise without interference.
-
-- find all voids
-- Save all pixels
 - Handle very small voids as a whole (quick batch) via the current extractor
-- Handle single-tile voids
-- Keep multi-tile voids as sparse arrays on disk - keep track of tiles
+- Handle single-tile voids similarly
+- Find mechanism to save multitile voids.
+- Keep lowerright edge to relate voids after tile processing, turn into hash
+- Now it becomes a jigsaw
+- Exterior voids are saved as sparse voids in memory. If we look at an extra pixel, on the lower right edges, the voids can be related.
+- How to combine into sparse void edge?
 - Aggregate sparsely
 - Smooth batchwise
 
