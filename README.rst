@@ -37,6 +37,18 @@ Procedure for filling completely filling internal nodata
 - Aggregate sparsely
 - Smooth batchwise
 
+Have user define a coarse region
+Have code define a rectangular grid
+
+Define edge voids as unresolvable
+Per void keep track of
+- edge data
+- yet unknown edges to compare to upcoming tiles
+- tiles related to this void
+
+Expanded void fills must be properly aligned to tile, how? Easy, the origin
+will stay the same and can be related to the rectangular grid
+
 
 Creating streamlines
 --------------------
