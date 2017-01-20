@@ -1,14 +1,18 @@
 # (c) Nelen & Schuurmans, see LICENSE.rst.
 # -*- coding: utf-8 -*-
 """
-Fills nodata in a raster, partitioning the work by geometries supplied via
-shapefile, writing the output in a separate rasters.
+Fills nodata in a large raster dataset.
 
 The main principle is to aggregate the raster per quad of pixels and repeat
 until only one pixel is left, and then zooming back in and smoothing at each
 zoom step.
-"""
 
+However, things get complicated since a typical dataset does not fit in
+memory.  Therefore the dataset is processed in tiles and per tile the edge
+voids are remembered for later merging and storing. If all edge voids for a
+tile are resolved, it is written a second time. It is up to the user to
+combine the result tiles into a single void dataset.
+"""
 from __future__ import print_function
 from __future__ import unicode_literals
 from __future__ import absolute_import
@@ -16,13 +20,16 @@ from __future__ import division
 
 from os.path import dirname, exists, join
 import argparse
+import itertools
 import os
+from hashlib import md5
+from struct import pack
 
 from scipy import ndimage
 import numpy as np
 
 from raster_tools import datasets
-from raster_tools import datasources
+# from raster_tools import datasources
 from raster_tools import groups
 from raster_tools import utils
 
@@ -32,6 +39,9 @@ from osgeo import ogr
 TIF = gdal.GetDriverByName(str('GTiff'))
 MEM = ogr.GetDriverByName(str('Memory'))
 SHP = ogr.GetDriverByName(str('ESRI Shapefile'))
+
+SIZE = 600
+
 
 OPTIONS = ['compress=deflate', 'tiled=yes']
 
@@ -43,6 +53,46 @@ KERNEL = np.array([[0.0625, 0.1250,  0.0625],
 def zoom(values):
     """ Return zoomed array. """
     return values.repeat(2, axis=0).repeat(2, axis=1)
+
+
+def grow(slices):
+    """ Return 2-tuple of grown slice objects. """
+    s1, s2 = slices
+    return slice(s1.start - 1, s1.stop + 1), slice(s2.start - 1, s2.stop + 1)
+
+
+def block(slices):
+    """ Return 2-tuple of superblock slice objects. """
+    s1, s2 = slices
+    i1, i2 = s1.start, s1.stop - 1
+    j1, j2 = s2.start, s2.stop - 1
+    d = 1
+    while i1 // d != i2 // d or j1 // d != j2 // d:
+        d *= 2
+    print(d)
+    print(d, i1, i2, j1, j2)
+    return (slice(i1 // d * d, d * (1 + i1 // d)),
+            slice(j1 // d * d, d * (1 + j1 // d)))
+
+
+from math import ceil, log
+def block1(slices):
+    s1, s2 = slices
+    i1, i2 = s1.start, s1.stop - 1
+    j1, j2 = s2.start, s2.stop - 1
+    h, w = i2 - i1, j2 - j1
+    print(
+    d = max(2 ** int(ceil(log(h, 2))),
+            2 ** int(ceil(log(w, 2))))
+    if i1 // d != (i2 - 1) // d or j1 // d != (j2 - 1) // d:
+        d *= 2
+    print(d)
+    return (slice(i1 // d * d, d * (1 + i1 // d)),
+            slice(j1 // d * d, d * (1 + j1 // d)))
+
+
+
+
 
 
 def smooth(values):
@@ -236,18 +286,137 @@ class Filler(object):
         SHP.CreateDataSource(root + '.shp').CopyLayer(layer, name)
 
 
-def fillnodata(feature_path, part, **kwargs):
-    """
-    """
-    # select some or all polygons
-    features = datasources.PartialDataSource(feature_path)
-    if part is not None:
-        features = features.select(part)
+class TileManager(object):
 
-    filler = Filler(**kwargs)
+    def __init__(self, shape_path, source_path):
+        # remember source dataset
+        self.source = groups.Group(gdal.Open(source_path))
 
-    for feature in features:
-        filler.fill(feature)
+        # find indices
+        shape = ogr.Open(shape_path)
+        layer = shape[0]
+        feature = layer[0]
+        geometry = feature.geometry()
+        bounds = self.geo_transform.get_indices(geometry, inflate=True)
+
+        # have to fix: get_indices currently swaps x and y
+        self.bounds = bounds[1], bounds[0], bounds[3], bounds[2]
+
+        self.kwargs = {'projection': self.source.projection,
+                       'no_data_value': self.source.no_data_value.item()}
+        print(self.bounds)
+
+    def __iter__(self):
+        """ Yield tile objects with data load capability. """
+        i1, j1, i2, j2 = self.bounds
+        i_range = range(i1, i2, SIZE)
+        j_range = range(j1, j2, SIZE)
+        total = len(i_range) * len(j_range)
+        count = itertools.count(1)
+        for i in range(i1, i2, SIZE):
+            for j in range(j1, j2, SIZE):
+                bounds = i, j, min(i + SIZE, i2), min(j + SIZE, j2)
+
+                yield Tile(manager=self, bounds=bounds)
+                print(bounds)
+                print(count, total)
+                gdal.TermProgress_nocb(count.next() / total)
+
+    @property
+    def geo_transform(self):
+        return self.source.geo_transform
+
+    def get_above_of(self, tile):
+        i1, j1, i2, j2 = tile.bounds
+        if i1 != self.bounds[0]:
+            bounds = i1 - SIZE, j1, i1, j2
+            return Tile(manager=self, bounds=bounds)
+
+    def get_left_of(self, tile):
+        i1, j1, i2, j2 = tile.bounds
+        if j1 != self.bounds[1]:
+            bounds = i1, j1 - SIZE, i2, j1
+            return Tile(manager=self, bounds=bounds)
+
+    def get_kwargs_for(self, tile):
+        geo_transform = self.geo_transform
+        origin = tile.bounds[:2]
+        kwargs = {'geo_transform': geo_transform.rebased(origin=origin)}
+        kwargs.update(self.kwargs)
+        return kwargs
+
+    def get_array_for(self, tile):
+        # have to fix: get_indices currently swaps x and y
+        i1, j1, i2, j2 = tile.bounds
+        bounds = j1, i1, j2, i2
+        return self.source.read(bounds)
+
+
+class Tile(object):
+    def __init__(self, manager, bounds):
+        self.manager = manager
+        self.bounds = bounds
+        self.hash = md5(pack('4q', *bounds)).hexdigest()
+
+    def get_left(self):
+        return self.manager.get_left_of(self)
+
+    def get_above(self):
+        return self.manager.get_above_of(self)
+
+    def get_array(self):
+        return self.manager.get_array_for(self)
+
+    def get_kwargs(self):
+        return self.manager.get_kwargs_for(self)
+
+    def __repr__(self):
+        i1, j1, i2, j2 = self.bounds
+        return str((self.bounds, i2 - i1, j2 - j1))
+
+
+def process(tile):
+    """
+    Returns array with interior voids filled.
+
+    Modifies the tile object by setting sparse exterior void edges as
+    attributes on the tile.
+    """
+    data = tile.get_array()
+    mask = np.equal(data, tile.no_data_value)
+    label, total = ndimage.label(mask)
+    objects = ndimage.find_objects(label)
+    objects
+    # edges
+    tile.edges = (
+        label[0].copy(),
+        label[:, 0].copy(),
+        label[-1].copy(),
+        label[:, -1].copy(),
+    )
+    # edge labels
+    edges = set(map(np.unique, tile.edges))
+    edges
+
+    # mark outside objects
+    # grow interior object slices - no problem
+    # determine batch? Just add objects to the batch as long as the object does
+    # not fit in the
+
+
+def fillnodata(shape_path, source_path, target_path):
+    """
+    Determine extent and create a tile manager.
+    """
+    os.mkdir(target_path)
+
+    tile_manager = TileManager(shape_path=shape_path, source_path=source_path)
+    for tile in tile_manager:
+        array = process(tile).get_array()[np.newaxis]
+        kwargs = tile.get_kwargs()
+        path = join(target_path, tile.hash + '-1.tif')
+        with datasets.Dataset(array, **kwargs) as dataset:
+            TIF.CreateCopy(path, dataset, options=OPTIONS)
 
 
 def get_parser():
@@ -257,35 +426,19 @@ def get_parser():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        'feature_path',
-        metavar='FEATURES',
-        help='shapefile with geometries and names of output tiles',
+        'shape_path',
+        metavar='SHAPE',
+        help='source OGR dataset indicating data selection to fill.'
     )
     parser.add_argument(
         'source_path',
-        metavar='RASTER',
+        metavar='SOURCE',
         help='source GDAL raster dataset with voids'
     )
     parser.add_argument(
         'target_path',
         metavar='OUTPUT',
         help='output folder for rasters containing the fillings',
-    )
-    parser.add_argument(
-        '-s', '--single',
-        action='store_true',
-        help='Only process one matching void per feature - implies 2nd pass',
-    )
-    parser.add_argument(
-        '-a', '--aggregation',
-        dest='func',
-        default='min',
-        choices=('min', 'mean', 'max'),
-        help='statistic to use for quad aggregations',
-    )
-    parser.add_argument(
-        '-p', '--part',
-        help='partial processing source, e.g. "2/3"',
     )
     return parser
 

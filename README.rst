@@ -27,18 +27,36 @@ Creating a seamless large-scale void-filled raster (deprecated)
 
 Procedure for filling completely filling internal nodata
 --------------------------------------------------------
-- Handle very small voids as a whole (quick batch) via the current extractor
-- Handle single-tile voids similarly
-- Find mechanism to save multitile voids.
-- Keep lowerright edge to relate voids after tile processing, turn into hash
-- Now it becomes a jigsaw
-- Exterior voids are saved as sparse voids in memory. If we look at an extra pixel, on the lower right edges, the voids can be related.
-- How to combine into sparse void edge?
-- Aggregate sparsely
-- Smooth batchwise
+Rebuild the current file to not use an internal index of optional tiling size
+Add the batch speedup to the extractor (yield multiple non interfering voids)
+Create SparseEdge object:
+    - incremental growth
+    - mergeable
+Create SparseEdgeAggregation
+    - aggregate on init from sparse edge
+    - rasterize method
 
-Have user define a coarse region
-Have code define a rectangular grid
+# relate current tile edges to previous tile edges how? A hash in a dictionary
+of the coordinates?
+
+process a tile
+swiftly smooth internals - write the tile to disk
+create edgevoid sparse objects for all exterior voids
+on next related tile, see if void can be closed from data
+otherwise, it can be merged.
+remember voids by tile link
+remember voids by tile
+
+2 big questions remain.
+sparse merge how?
+    - missing data points from adjacent tile can be completed
+    - now voids can be merged from still missing points:
+    - loop current tile missing edge pixels => pop corresponding voids from
+    - something with labels and an & operation.
+aggregated rasterize how? slice from sparse arrays!
+
+
+
 
 Define edge voids as unresolvable
 Per void keep track of
