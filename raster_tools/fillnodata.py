@@ -36,91 +36,9 @@ from raster_tools import utils
 from osgeo import gdal
 from osgeo import ogr
 
-TIF = gdal.GetDriverByName(str('GTiff'))
-MEM = ogr.GetDriverByName(str('Memory'))
-SHP = ogr.GetDriverByName(str('ESRI Shapefile'))
-
-SIZE = 600
-
-
-OPTIONS = ['compress=deflate', 'tiled=yes']
-
-KERNEL = np.array([[0.0625, 0.1250,  0.0625],
-                   [0.1250, 0.2500,  0.1250],
-                   [0.0625, 0.1250,  0.0625]])
-
-
-def zoom(values):
-    """ Return zoomed array. """
-    return values.repeat(2, axis=0).repeat(2, axis=1)
-
-
-def grow(slices):
-    """ Return 2-tuple of grown slice objects. """
-    s1, s2 = slices
-    return slice(s1.start - 1, s1.stop + 1), slice(s2.start - 1, s2.stop + 1)
-
-
-def block(slices):
-    """ Return 2-tuple of superblock slice objects. """
-    s1, s2 = slices
-    i1, i2 = s1.start, s1.stop - 1
-    j1, j2 = s2.start, s2.stop - 1
-    d = 1
-    while i1 // d != i2 // d or j1 // d != j2 // d:
-        d *= 2
-    print(d)
-    print(d, i1, i2, j1, j2)
-    return (slice(i1 // d * d, d * (1 + i1 // d)),
-            slice(j1 // d * d, d * (1 + j1 // d)))
-
-
-from math import ceil, log
-def block1(slices):
-    s1, s2 = slices
-    i1, i2 = s1.start, s1.stop - 1
-    j1, j2 = s2.start, s2.stop - 1
-    h, w = i2 - i1, j2 - j1
-    print(
-    d = max(2 ** int(ceil(log(h, 2))),
-            2 ** int(ceil(log(w, 2))))
-    if i1 // d != (i2 - 1) // d or j1 // d != (j2 - 1) // d:
-        d *= 2
-    print(d)
-    return (slice(i1 // d * d, d * (1 + i1 // d)),
-            slice(j1 // d * d, d * (1 + j1 // d)))
-
-
-
-
-
-
-def smooth(values):
-    """ Two-step uniform for symmetric smoothing. """
-    return ndimage.correlate(values, KERNEL)
-
-
-def fill(func, values, no_data_value):
-    """
-    Fill must return a filled array. It does so by aggregating, requesting a
-    fill for that (so this is a recursive thing), and zooming back. After
-    zooming back, it smooths the filled values and returns.
-    """
-    mask = values == no_data_value
-    if not mask.any():
-        # this should end the recursion
-        return values
-
-    # aggregate
-    aggregated = utils.aggregate_uneven(func=func,
-                                        values=values,
-                                        no_data_value=no_data_value)
-
-    filled = fill(func=func, **aggregated)
-    zoomed = zoom(filled)[:values.shape[0], :values.shape[1]]
-    return np.where(mask, smooth(zoomed), values)
-
-
+#
+#
+#
 class BaseExtractor(object):
     """ Extract objects from a void mask. """
 
@@ -284,15 +202,106 @@ class Filler(object):
 
         # write shape
         SHP.CreateDataSource(root + '.shp').CopyLayer(layer, name)
+#
+#
+#
+
+TIF = gdal.GetDriverByName(str('GTiff'))
+MEM = ogr.GetDriverByName(str('Memory'))
+SHP = ogr.GetDriverByName(str('ESRI Shapefile'))
+
+SIZE = 600
+
+
+OPTIONS = ['compress=deflate', 'tiled=yes']
+
+KERNEL = np.array([[0.0625, 0.1250,  0.0625],
+                   [0.1250, 0.2500,  0.1250],
+                   [0.0625, 0.1250,  0.0625]])
+
+
+def zoom(values):
+    """ Return zoomed array. """
+    return values.repeat(2, axis=0).repeat(2, axis=1)
+
+
+def grow(slices):
+    """ Return 2-tuple of grown slice objects. """
+    s1, s2 = slices
+    return slice(s1.start - 1, s1.stop + 1), slice(s2.start - 1, s2.stop + 1)
+
+
+def smooth(values):
+    """ Two-step uniform for symmetric smoothing. """
+    return ndimage.correlate(values, KERNEL)
+
+
+def block(slices):
+    """ Return 2-tuple of superblock slice objects. """
+    s1, s2 = slices
+    i1, i2 = s1.start, s1.stop - 1
+    j1, j2 = s2.start, s2.stop - 1
+    d = 1
+    while i1 // d != i2 // d or j1 // d != j2 // d:
+        d *= 2
+    print(d)
+    print(d, i1, i2, j1, j2)
+    return (slice(i1 // d * d, d * (1 + i1 // d)),
+            slice(j1 // d * d, d * (1 + j1 // d)))
+
+
+from math import ceil, log
+def block1(slices):
+    s1, s2 = slices
+    i1, i2 = s1.start, s1.stop - 1
+    j1, j2 = s2.start, s2.stop - 1
+    h, w = i2 - i1, j2 - j1
+    d = max(2 ** int(ceil(log(h, 2))),
+            2 ** int(ceil(log(w, 2))))
+    if i1 // d != (i2 - 1) // d or j1 // d != (j2 - 1) // d:
+        d *= 2
+    return (slice(i1 // d * d, d * (1 + i1 // d)),
+            slice(j1 // d * d, d * (1 + j1 // d)))
+
+
+
+
+def fill(func, values, no_data_value):
+    """
+    Fill must return a filled array. It does so by aggregating, requesting a
+    fill for that (so this is a recursive thing), and zooming back. After
+    zooming back, it smooths the filled values and returns.
+    """
+    mask = values == no_data_value
+    if not mask.any():
+        # this should end the recursion
+        return values
+
+    # aggregate
+    aggregated = utils.aggregate_uneven(func=func,
+                                        values=values,
+                                        no_data_value=no_data_value)
+
+    filled = fill(func=func, **aggregated)
+    zoomed = zoom(filled)[:values.shape[0], :values.shape[1]]
+    return np.where(mask, smooth(zoomed), values)
+
+
+
+
 
 
 class TileManager(object):
 
     def __init__(self, shape_path, source_path):
-        # remember source dataset
-        self.source = groups.Group(gdal.Open(source_path))
+        # remember source dataset and derivatives
+        source = groups.Group(gdal.Open(source_path))
+        self.no_data_value = source.no_data_value.item()
+        self.geo_transform = source.geo_transform
+        self.projection = source.projection
+        self.source = source
 
-        # find indices
+        # find indices into source from defining shape
         shape = ogr.Open(shape_path)
         layer = shape[0]
         feature = layer[0]
@@ -301,10 +310,6 @@ class TileManager(object):
 
         # have to fix: get_indices currently swaps x and y
         self.bounds = bounds[1], bounds[0], bounds[3], bounds[2]
-
-        self.kwargs = {'projection': self.source.projection,
-                       'no_data_value': self.source.no_data_value.item()}
-        print(self.bounds)
 
     def __iter__(self):
         """ Yield tile objects with data load capability. """
@@ -316,46 +321,47 @@ class TileManager(object):
         for i in range(i1, i2, SIZE):
             for j in range(j1, j2, SIZE):
                 bounds = i, j, min(i + SIZE, i2), min(j + SIZE, j2)
-
-                yield Tile(manager=self, bounds=bounds)
-                print(bounds)
-                print(count, total)
+                yield self._get_tile(bounds)
                 gdal.TermProgress_nocb(count.next() / total)
 
-    @property
-    def geo_transform(self):
-        return self.source.geo_transform
+    def _get_tile(self, bounds):
+        tile = Tile(
+            manager=self,
+            bounds=bounds,
+            projection=self.projection,
+            no_data_value=self.no_data_value,
+            geo_transform=self.geo_transform.rebased(origin=bounds[:2]),
+        )
+        return tile
 
     def get_above_of(self, tile):
         i1, j1, i2, j2 = tile.bounds
         if i1 != self.bounds[0]:
             bounds = i1 - SIZE, j1, i1, j2
-            return Tile(manager=self, bounds=bounds)
+            return self._get_tile(bounds)
 
     def get_left_of(self, tile):
         i1, j1, i2, j2 = tile.bounds
         if j1 != self.bounds[1]:
             bounds = i1, j1 - SIZE, i2, j1
-            return Tile(manager=self, bounds=bounds)
+            return self._get_tile(bounds)
 
-    def get_kwargs_for(self, tile):
-        geo_transform = self.geo_transform
-        origin = tile.bounds[:2]
-        kwargs = {'geo_transform': geo_transform.rebased(origin=origin)}
-        kwargs.update(self.kwargs)
-        return kwargs
-
-    def get_array_for(self, tile):
-        # have to fix: get_indices currently swaps x and y
+    def get_data_for(self, tile):
+        # have to fix: source.read() currently swaps x and y
         i1, j1, i2, j2 = tile.bounds
         bounds = j1, i1, j2, i2
         return self.source.read(bounds)
 
 
 class Tile(object):
-    def __init__(self, manager, bounds):
+    def __init__(self, manager, bounds,
+                 projection, no_data_value, geo_transform):
+
         self.manager = manager
         self.bounds = bounds
+        self.projection = projection
+        self.no_data_value = no_data_value
+        self.geo_transform = geo_transform
         self.hash = md5(pack('4q', *bounds)).hexdigest()
 
     def get_left(self):
@@ -364,11 +370,8 @@ class Tile(object):
     def get_above(self):
         return self.manager.get_above_of(self)
 
-    def get_array(self):
-        return self.manager.get_array_for(self)
-
-    def get_kwargs(self):
-        return self.manager.get_kwargs_for(self)
+    def get_data(self):
+        return self.manager.get_data_for(self)
 
     def __repr__(self):
         i1, j1, i2, j2 = self.bounds
@@ -381,25 +384,95 @@ def process(tile):
 
     Modifies the tile object by setting sparse exterior void edges as
     attributes on the tile.
+
+    # here's a way to restart at value changes
+    a = np.array([1,1,1,1,1,1,2,2,2,2,5,5,5,5,5])
+    b = np.ones_like(a)
+    c = ndimage.sum(b, a, np.arange(-1, 6)).cumsum()
+    np.arange(a.size) - c[a]
+
+    # and here is the algo to relate edge voids:
+    result = np.logical_and(label_a, label_b)
+    join on the bases of this result
     """
-    data = tile.get_array()
+    # load and label data
+    data = tile.get_data()
     mask = np.equal(data, tile.no_data_value)
     label, total = ndimage.label(mask)
     objects = ndimage.find_objects(label)
-    objects
-    # edges
-    tile.edges = (
-        label[0].copy(),
-        label[:, 0].copy(),
-        label[-1].copy(),
-        label[:, -1].copy(),
-    )
-    # edge labels
-    edges = set(map(np.unique, tile.edges))
-    edges
+    objects = [(s1.start, s1.stop, s2.start, s2.stop) for s1, s2 in objects]
+    objects = np.array(objects)
 
-    # mark outside objects
-    # grow interior object slices - no problem
+    # identify edge voids from slices
+    top, bottom, left, right = objects.transpose()
+    height, width = label.shape
+    inside = ~np.logical_or.reduce([
+        top == 0, bottom == height, left == 0, right == width,
+    ])
+
+    # interior = objects[~outside] + [[-1, 1, -1, 1]]  # grown
+
+    # initial conditions
+    squares = (objects[inside] - [[0, 1, 0, 1]])
+    tracker = np.arange(1, 1 + total)[inside]
+    size = 2
+
+    # loop superpixel sizes
+    while len(tracker):
+        regions = squares // size
+        top, bottom, left, right = regions.transpose()
+        s1 = (top == bottom) & (left == right)
+        # loop until all voids within the same superpixel are filled
+        subtracker = tracker[s1]
+        subregions = regions[s1]
+        while len(subtracker):
+            # now tracker[s1] contains the label numbers
+            # and squares[s1] contains the superpixel indices
+            # s1 is a boolean index into inside objects that fit in quads
+            # s2 is a boolean index selecting unique objects per superpixel
+            s2 = np.zeros(len(subtracker), dtype='b1')
+            s2[np.unique(
+                SIZE * subregions[:, 0] + subregions[:, 2],
+                return_index=True,
+            )[1]] = True
+
+            # 
+            # what to do whith these? construct edge array with data and mask
+            # array with labels. Both can be just returned to check the result
+            import ipdb
+            ipdb.set_trace()
+
+
+            # remove processed voids from
+            subtracker = subtracker[~s2]
+            subregions = subregions[~s2]
+            break
+        # drop s1 selection from tracker
+        tracker = tracker[~s1]
+        # squares? regions?
+        size *=2
+        break
+
+           
+
+
+
+    # edges
+    # top, bottom, left, right
+    tile.voids = (
+    )
+
+    # keep edges that refer to voids via labels
+    tile.edges = (
+        label[:, 0].copy(),
+        label[0].copy(),
+        label[:, -1].copy(),
+        label[-1].copy(),
+    )
+
+    # determine the maximum aggregation factor per void
+
+    
     # determine batch? Just add objects to the batch as long as the object does
     # not fit in the
 
@@ -412,8 +485,12 @@ def fillnodata(shape_path, source_path, target_path):
 
     tile_manager = TileManager(shape_path=shape_path, source_path=source_path)
     for tile in tile_manager:
-        array = process(tile).get_array()[np.newaxis]
-        kwargs = tile.get_kwargs()
+        array = process(tile)[np.newaxis]  # modifies tile, too
+        kwargs = {
+            'projection': tile.projection,
+            'geo_transform': tile.geo_transform,
+            'no_data_value': tile.no_data_value,
+        }
         path = join(target_path, tile.hash + '-1.tif')
         with datasets.Dataset(array, **kwargs) as dataset:
             TIF.CreateCopy(path, dataset, options=OPTIONS)
