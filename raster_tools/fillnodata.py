@@ -18,7 +18,7 @@ from __future__ import unicode_literals
 from __future__ import absolute_import
 from __future__ import division
 
-from os.path import dirname, exists, join
+from os.path import join
 import argparse
 import itertools
 import os
@@ -36,184 +36,18 @@ from raster_tools import utils
 from osgeo import gdal
 from osgeo import ogr
 
-#
-#
-#
-class BaseExtractor(object):
-    """ Extract objects from a void mask. """
-
-    def __init__(self, mask):
-        self.label, total = ndimage.label(mask)
-        self.objects = ndimage.find_objects(self.label)
-
-    def grow(self, slices):
-        """
-        Return slices, limited.
-
-        :param slices: 2-tuple of slice objects
-
-        The result is a 2-tuple of grown slice objects. Limited is a boolean
-        indicating whether growth was limited by one or more array edges.
-        """
-        h, w = self.label.shape
-        y1, y2, x1, x2 = (slices[0].start, slices[0].stop,
-                          slices[1].start, slices[1].stop)
-
-        Y1 = max(0, y1 - 1)
-        Y2 = min(h, y2 + 1)
-        X1 = max(0, x1 - 1)
-        X2 = min(w, x2 + 1)
-
-        slices = (slice(Y1, Y2), slice(X1, X2))
-        limited = (y1 == Y1 or y2 == Y2 or x1 == X1 or x2 == X2)
-
-        return slices, limited
-
-    def get_objects(self, objects):
-        """ Return slices, void, edge. """
-        for slices, label in objects:
-            void = self.label[slices] == label
-            edge = ndimage.binary_dilation(void) - void
-            yield slices, void, edge
-
-    def get_interior_objects(self):
-        return self.get_objects(self.interior_objects)
-
-    def get_exterior_objects(self):
-        return self.get_objects(self.exterior_objects)
-
-
-class MultiExtractor(BaseExtractor):
-    def __init__(self, *args, **kwargs):
-        super(MultiExtractor, self).__init__(*args, **kwargs)
-        # split interior and exterior objects in lists of (slices,
-        # label)-tuples
-        self.interior_objects = []
-        self.exterior_objects = []
-        for label, slices in enumerate(self.objects, 1):
-            slices, limited = self.grow(slices)
-            if limited:
-                self.exterior_objects.append((slices, label))
-            else:
-                self.interior_objects.append((slices, label))
-
-
-class SingleExtractor(BaseExtractor):
-    def __init__(self, *args, **kwargs):
-        super(SingleExtractor, self).__init__(*args, **kwargs)
-        # find the main object in the list of objects
-        height, width = self.label.shape
-        slices = slice(1, height - 1), slice(1, width - 1)
-        label = self.objects.index(slices)
-        slices = self.grow(slices)[0]
-        self.interior_objects = [(slices, label)]
-        self.exterior_objects = []
-
-
-class Filler(object):
-    """
-    Fill voids, one by one. The voids have to be filled one by one because a
-    recursive aggregation producedure is followed. The edges of one void may
-    interfere on some aggregation level with the edges of another void, thereby
-    affecting both fillings.
-    """
-    def __init__(self, source_path, target_path, func, single):
-        """
-        If edges_path is given, write edge void geometries to a shapefile.
-        Otherwise process only a single void spanning the whole geometry.
-        """
-        self.Extractor = SingleExtractor if single else MultiExtractor
-        self.source = groups.Group(gdal.Open(source_path))
-        self.target_path = target_path
-        self.single = single
-        self.func = func
-
-    def fill(self, feature):
-        """
-        Write filled raster and edge shapes to target directory.
-        """
-        # determine path
-        name = feature[str('unit')]
-        root = join(self.target_path, name[:3], name)
-        path = root + '.tif'
-        if exists(path):
-            return
-
-        # retrieve data
-        geometry = feature.geometry()
-        geo_transform = self.source.geo_transform.shifted(geometry)
-        values = self.source.read(geometry)
-        no_data_value = self.source.no_data_value
-        mask = (values == no_data_value)
-        if mask.all():
-            return
-
-        extractor = self.Extractor(mask)
-
-        # part one - filling of interior voids
-        func = self.func
-        result = np.full_like(values, no_data_value)
-        for slices, void, edge in extractor.get_interior_objects():
-            break
-            work = values[slices].copy()
-            work[~edge] = no_data_value
-            filled = fill(func=func, values=work, no_data_value=no_data_value)
-            result[slices][void] = filled[void]
-
-        # create directory
-        try:
-            os.makedirs(dirname(path))
-        except OSError:
-            pass  # no problem
-
-        # write tiff
-        kwargs = {
-            'geo_transform': geo_transform,
-            'projection': self.source.projection,
-            'no_data_value': no_data_value.item(),
-        }
-        array = result[np.newaxis]
-        with datasets.Dataset(array, **kwargs) as dataset:
-            TIF.CreateCopy(path, dataset, options=OPTIONS)
-
-        if self.single:
-            return
-
-        # part two - keeping track of exterior voids
-        data_source = MEM.CreateDataSource(str(''))
-        layer = data_source.CreateLayer(
-            str(name),
-            srs=geometry.GetSpatialReference(),
-        )
-        field_defn = ogr.FieldDefn(str('unit'), ogr.OFTString)
-        layer.CreateField(field_defn)
-        kwargs = {
-            'no_data_value': 0,
-            'projection': self.source.projection,
-        }
-        for slices, void, edge in extractor.get_exterior_objects():
-            origin = slices[0].start, slices[1].start
-            kwargs['geo_transform'] = geo_transform.rebased(origin)
-            # array = np.uint8(void | edge)[np.newaxis]
-            array = np.uint8(void)[np.newaxis]
-            with datasets.Dataset(array, **kwargs) as dataset:
-                band = dataset.GetRasterBand(1)
-                gdal.Polygonize(band, band, layer, 0)
-
-        # write shape
-        SHP.CreateDataSource(root + '.shp').CopyLayer(layer, name)
-#
-#
-#
-
 TIF = gdal.GetDriverByName(str('GTiff'))
-MEM = ogr.GetDriverByName(str('Memory'))
-SHP = ogr.GetDriverByName(str('ESRI Shapefile'))
+# MEM = ogr.GetDriverByName(str('Memory'))
+# SHP = ogr.GetDriverByName(str('ESRI Shapefile'))
 
-SIZE = 600
+UP = 0
+LEFT = 1
+DOWN = 2
+RIGHT = 3
 
+SIZE = 256
 
-OPTIONS = ['compress=deflate', 'tiled=yes']
+OPTIONS = ['COMPRESS=DEFLATE', 'TILED=YES']
 
 KERNEL = np.array([[0.0625, 0.1250,  0.0625],
                    [0.1250, 0.2500,  0.1250],
@@ -236,36 +70,6 @@ def smooth(values):
     return ndimage.correlate(values, KERNEL)
 
 
-def block(slices):
-    """ Return 2-tuple of superblock slice objects. """
-    s1, s2 = slices
-    i1, i2 = s1.start, s1.stop - 1
-    j1, j2 = s2.start, s2.stop - 1
-    d = 1
-    while i1 // d != i2 // d or j1 // d != j2 // d:
-        d *= 2
-    print(d)
-    print(d, i1, i2, j1, j2)
-    return (slice(i1 // d * d, d * (1 + i1 // d)),
-            slice(j1 // d * d, d * (1 + j1 // d)))
-
-
-from math import ceil, log
-def block1(slices):
-    s1, s2 = slices
-    i1, i2 = s1.start, s1.stop - 1
-    j1, j2 = s2.start, s2.stop - 1
-    h, w = i2 - i1, j2 - j1
-    d = max(2 ** int(ceil(log(h, 2))),
-            2 ** int(ceil(log(w, 2))))
-    if i1 // d != (i2 - 1) // d or j1 // d != (j2 - 1) // d:
-        d *= 2
-    return (slice(i1 // d * d, d * (1 + i1 // d)),
-            slice(j1 // d * d, d * (1 + j1 // d)))
-
-
-
-
 def fill(func, values, no_data_value):
     """
     Fill must return a filled array. It does so by aggregating, requesting a
@@ -285,10 +89,6 @@ def fill(func, values, no_data_value):
     filled = fill(func=func, **aggregated)
     zoomed = zoom(filled)[:values.shape[0], :values.shape[1]]
     return np.where(mask, smooth(zoomed), values)
-
-
-
-
 
 
 class TileManager(object):
@@ -380,24 +180,19 @@ class Tile(object):
 
 def process(tile):
     """
-    Returns array with interior voids filled.
+    Returns filling array for interior voids.
 
     Modifies the tile object by setting sparse exterior void edges as
     attributes on the tile.
-
-    # here's a way to restart at value changes
-    a = np.array([1,1,1,1,1,1,2,2,2,2,5,5,5,5,5])
-    b = np.ones_like(a)
-    c = ndimage.sum(b, a, np.arange(-1, 6)).cumsum()
-    np.arange(a.size) - c[a]
 
     # and here is the algo to relate edge voids:
     result = np.logical_and(label_a, label_b)
     join on the bases of this result
     """
     # load and label data
+    no_data_value = tile.no_data_value
     data = tile.get_data()
-    mask = np.equal(data, tile.no_data_value)
+    mask = np.equal(data, no_data_value)
     label, total = ndimage.label(mask)
     objects = ndimage.find_objects(label)
     objects = [(s1.start, s1.stop, s2.start, s2.stop) for s1, s2 in objects]
@@ -410,59 +205,61 @@ def process(tile):
         top == 0, bottom == height, left == 0, right == width,
     ])
 
-    # interior = objects[~outside] + [[-1, 1, -1, 1]]  # grown
+    # define object bboxes as having inclusive ENDS as opposed to slices
+    bboxes = (objects[inside] + [[-1, 0, -1, 0]])
 
-    # initial conditions
-    squares = (objects[inside] - [[0, 1, 0, 1]])
+    # have an array that tracks the labels that still have to be processed
     tracker = np.arange(1, 1 + total)[inside]
-    size = 2
+
+    # start at 4 since a single pixel including its edges won't fit size 2
+    size = 4
 
     # loop superpixel sizes
+    result = np.full_like(data, no_data_value)
     while len(tracker):
-        regions = squares // size
+        # floor dividing by size results the index into quads of current size
+        regions = bboxes // size
         top, bottom, left, right = regions.transpose()
+        # s1 is a boolean index selecting objects that fit in the quads
         s1 = (top == bottom) & (left == right)
-        # loop until all voids within the same superpixel are filled
+
+        # have an array that tracks the subset of labels for the current size
         subtracker = tracker[s1]
         subregions = regions[s1]
+        # loop until all voids within the same superpixel are filled
         while len(subtracker):
-            # now tracker[s1] contains the label numbers
-            # and squares[s1] contains the superpixel indices
-            # s1 is a boolean index into inside objects that fit in quads
-            # s2 is a boolean index selecting unique objects per superpixel
+            # now for the current quad size, subtracker contains the label
+            # numbers and subregions contains the indices into a the quad grid
+
+            # s2 is a boolean index that select unique indices
             s2 = np.zeros(len(subtracker), dtype='b1')
             s2[np.unique(
                 SIZE * subregions[:, 0] + subregions[:, 2],
                 return_index=True,
             )[1]] = True
 
-            # 
-            # what to do whith these? construct edge array with data and mask
-            # array with labels. Both can be just returned to check the result
-            import ipdb
-            ipdb.set_trace()
+            # using the subtracker
+            void = np.in1d(label, subtracker[s2]).reshape(label.shape)
+            edge = ndimage.binary_dilation(void) - void
+            values = np.where(edge, data, no_data_value).astype('f4')
+            filled = fill(
+                func='min', values=values, no_data_value=no_data_value
+            )
+            result[void] = filled[void]
 
-
-            # remove processed voids from
+            # remove processed voids from tracker and regions
             subtracker = subtracker[~s2]
             subregions = subregions[~s2]
-            break
-        # drop s1 selection from tracker
+
+        # drop s1 selection from tracker, because it is now processed
         tracker = tracker[~s1]
-        # squares? regions?
-        size *=2
-        break
+        bboxes = bboxes[~s1]
 
-           
+        # increase the size for the next loop
+        size *= 2
 
-
-
-    # edges
+    # write edge info
     # top, bottom, left, right
-    tile.voids = (
-    )
-
-    # keep edges that refer to voids via labels
     tile.edges = (
         label[:, 0].copy(),
         label[0].copy(),
@@ -470,11 +267,24 @@ def process(tile):
         label[-1].copy(),
     )
 
-    # determine the maximum aggregation factor per void
+    # keep edges that refer to voids via labels
+    tile.voids = []
+    for e in tile.edges:
+        side = {}
+        for l in np.unique(e):
+            if l == 0:
+                continue
+            void = label == l
+            edge = ndimage.binary_dilation(void) - void
+            index = edge.nonzero()
+            (x, y), z = index, data[index]
+        try:
+            side[l] = np.vstack([x, y, z])
+        except UnboundLocalError:
+            pass
+    tile.voids.append(side)
 
-    
-    # determine batch? Just add objects to the batch as long as the object does
-    # not fit in the
+    return result
 
 
 def fillnodata(shape_path, source_path, target_path):
@@ -494,6 +304,40 @@ def fillnodata(shape_path, source_path, target_path):
         path = join(target_path, tile.hash + '-1.tif')
         with datasets.Dataset(array, **kwargs) as dataset:
             TIF.CreateCopy(path, dataset, options=OPTIONS)
+
+def fillnodata(source_path, **kwargs):
+    from scipy import ndimage
+    f1 = np.array([[0, 1, 0],
+                   [1, 1, 0],
+                   [0, 0, 0]], dtype='b1')
+    f2 = np.array([[0, 0, 0],
+                   [0, 1, 1],
+                   [0, 1, 0]], dtype='b1')
+
+    l = np.array([[0, 0, 0, 0, 0],
+                  [0, 1, 1, 1, 0],
+                  [0, 0, 1, 1, 0],
+                  [0, 2, 0, 1, 0],
+                  [0, 0, 0, 0, 0]], 'u1')
+
+    e1 = ndimage.grey_dilation(l, footprint=f1) - l
+    e2 = ndimage.grey_dilation(l, footprint=f2) - l
+
+    n1 = e1.nonzero()
+    n2 = e2.nonzero()
+
+    i, j = np.mgrid[0:5, 0:5]
+
+    
+    m = e1[n1].tolist() + e2[n2].tolist()
+    u = i[n1].tolist() + i[n2].tolist()
+    v = j[n1].tolist() + j[n2].tolist()
+
+    import ipdb
+    ipdb.set_trace() 
+    
+
+
 
 
 def get_parser():
@@ -522,5 +366,12 @@ def get_parser():
 
 def main():
     """ Call fillnodata with args from parser. """
+    # import cProfile
+    # pr = cProfile.Profile()
+    # pr.enable()
+
     kwargs = vars(get_parser().parse_args())
     fillnodata(**kwargs)
+
+    # pr.disable()
+    # pr.print_stats(sort='time')

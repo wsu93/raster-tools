@@ -27,45 +27,78 @@ Creating a seamless large-scale void-filled raster (deprecated)
 
 Procedure for filling completely filling internal nodata
 --------------------------------------------------------
-Rebuild the current file to not use an internal index of optional tiling size
-Add the batch speedup to the extractor (yield multiple non interfering voids)
-Create SparseEdge object:
-    - incremental growth
-    - mergeable
-Create SparseEdgeAggregation
-    - aggregate on init from sparse edge
-    - rasterize method
-
-# relate current tile edges to previous tile edges how? A hash in a dictionary
-of the coordinates?
-
-process a tile
-swiftly smooth internals - write the tile to disk
-create edgevoid sparse objects for all exterior voids
-on next related tile, see if void can be closed from data
-otherwise, it can be merged.
-remember voids by tile link
-remember voids by tile
-
-2 big questions remain.
-sparse merge how?
-    - missing data points from adjacent tile can be completed
-    - now voids can be merged from still missing points:
-    - loop current tile missing edge pixels => pop corresponding voids from
-    - something with labels and an & operation.
-aggregated rasterize how? slice from sparse arrays!
 
 
+resolving multiple entries point to same sparsevoid
+
+Objects
+~~~~~~~
+TileManager
+    - read data
+    - label data
+    - create sparse void pieces using grey_dilation, register the voids
+    - per void register links
+    - register dangling (that is, edge) voids in the dangledict as a list of
+      absolute indices
+
+Tile
+    - data
+    - label
+    - offset
+    - origin
+
+Void
+    - tile, label list, so in each tile know which labels to materialize 
+    - indices list
+    - value list
+    - aggregated indices and values lists
+    - resolve dictionary with links to adjacent tiles and indices
+    - unknown: dictionary with connected tiles
+
+        pop backward link to us
+        merge (auto removes 2-way links, adds tiles, registers)
+
+    def merge(self, void):
+        update
+            links
+            indices
+            data
+            counter
+            there may be data or voids on the other side
+            void points can be merged
+            mutual data must be added, but there will be an edge that is not
+            to be used twice
+            
+
+    def resolve():
+        while links:
+            find a linked void from linked tile
+
+    def rasterize(self, array, origin):
+        from points selectively paste and smooth at increasing resolutions
+        decrease tile counter
+
+Another idea. Process data in tiles. Keep a connection table relating
+voids per tile. How to not miss over the edge data? Well, take 1px buffer
+around each tile,
+
+labelrelator
 
 
-Define edge voids as unresolvable
-Per void keep track of
-- edge data
-- yet unknown edges to compare to upcoming tiles
-- tiles related to this void
 
-Expanded void fills must be properly aligned to tile, how? Easy, the origin
-will stay the same and can be related to the rectangular grid
+Procedure
+~~~~~~~~~
+    voids dictionary linking tile,void to sparsevoid objects
+
+
+    pick a tile. now all voids are in void dictionary.
+    find objects.
+    per object:
+        get void from dictionary
+        void.resolve()
+        void.rasterize()
+        remove if void rasterize counter done.
+        transfer using the label and the object into the result array
 
 
 Creating streamlines
