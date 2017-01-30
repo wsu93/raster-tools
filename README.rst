@@ -37,9 +37,13 @@ TileManager
     - read data
     - label data
     - create sparse void pieces using grey_dilation, register the voids
-    - per void register links
+    - per void register links? What links?
     - register dangling (that is, edge) voids in the dangledict as a list of
-      absolute indices
+      absolute indices.
+
+TileEdge
+    - Mapping of two-way void numbers
+    - Mapping of void: Extradata
 
 Tile
     - data
@@ -55,9 +59,6 @@ Void
     - resolve dictionary with links to adjacent tiles and indices
     - unknown: dictionary with connected tiles
 
-        pop backward link to us
-        merge (auto removes 2-way links, adds tiles, registers)
-
     def merge(self, void):
         update
             links
@@ -69,20 +70,39 @@ Void
             mutual data must be added, but there will be an edge that is not
             to be used twice
             
-
     def resolve():
         while links:
-            find a linked void from linked tile
+            find a linked void from linked tile, stitch together.
+
+    def aggregate():
+        use dictionary method to update similiar coordinates on a level. Also,
+        we should remember the origin of each aggregated xyz set, to be able
+        to determine the offset into the zoomed array.
+
 
     def rasterize(self, array, origin):
         from points selectively paste and smooth at increasing resolutions
         decrease tile counter
 
-Another idea. Process data in tiles. Keep a connection table relating
-voids per tile. How to not miss over the edge data? Well, take 1px buffer
-around each tile,
+        # excerpt from quads.py
+        # zoom in using broadcasting
+        unz_array.shape = (unz_shape + (1, 1))
+        multiplier = np.ones((1, 1, zoom, zoom), dtype='u4')
+        zoomed_unz_array = (unz_array * multiplier).transpose(0, 2, 1, 3)
+        zoomed_unz_array = zoomed_unz_array.reshape(array.shape)
+        # but now we may use np.broadcast_to().copy() and see if that is
+        faster compared to above solution.
 
-labelrelator
+
+
+Keep connection table. Keep cache of tile edge resolutions: Links tiles and
+extra data to voids. So for a void one can lookup:
+- connected void
+- extra datapoints
+- Need to check both ways of a void in the final resolution.
+
+
+
 
 
 
