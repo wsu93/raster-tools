@@ -326,8 +326,10 @@ def fillnodata(source_path, **kwargs):
     n1 = e1.nonzero()
     n2 = e2.nonzero()
 
-    i, j = np.mgrid[0:5, 0:5]
+    i1 = (e1[n1],) + n1 # but, something with the dtypes is not right yet
+    i2 = (e2[n2],) + n2
 
+    i, j = np.mgrid[0:5, 0:5]
     
     m = e1[n1].tolist() + e2[n2].tolist()
     u = i[n1].tolist() + i[n2].tolist()
