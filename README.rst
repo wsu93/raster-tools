@@ -27,12 +27,32 @@ Creating a seamless large-scale void-filled raster (deprecated)
 
 Procedure for filling completely filling internal nodata
 --------------------------------------------------------
-Let's use h5py, and store different edge aggregations into different bands.
-So, we build a pyramid of aggregations, with the bands indicating the void
-numbers. Store a mapping to the bands of the lower level.
+Step 1 2D: - Labeling voids, strip process the entire dataset. NL
+300KM = 300000 Process the whole dataset in big strips of 250K.  - Skip
+the big outside void.  - Keep last line to compare to first of next,
+create connection table - Iterate that, until all strips are connected,
+resulting in a reclassification array per strip.  - Revisit all tiles
+(no offset this time) using this reclassification array, does: Done.
 
 
-Creating streamlines
+Step 2, 3D: - find all edges using two-step method, 1px buffer per strip
+needed, storing them in separate dimensions
+
+
+- tilewise, find the minimum and maximum label (from labels, giving
+dimensions to aggregate and do the aggregation (we have already the
+functions!)  - Do not incorporate dimensions that are empty, but do
+save them.  - until the whole tile fits in a pixel - this may have to
+be adaptive if there are many dimensions, we can incorporate a smaller
+spatial. Ugh, no.
+
+
+- zooming back in on the voids, calculate the void values. Per tile,
+start with a single pixel. Well, collect a pixel from neighbouring tiles,
+too. Zoom in, smooth. Etc. At lowest level, paste from dimension where
+void is. Remove dimensions that are presto.
+
+creating streamlines
 --------------------
 
 flow-fil index raster cover output/f
@@ -42,24 +62,24 @@ flow-vec index output/d/all.vrt output/a/all.vrt output/v   # makes features
 flow-rst index output/v output/r                            # features to tifs
 
 
-Post-nensskel setup TODO
+post-nensskel setup todo
 ------------------------
 
-Here are some instructions on what to do after you've created the project with
+here are some instructions on what to do after you've created the project with
 nensskel.
 
-- Add a new jenkins job at
-  http://buildbot.lizardsystem.nl/jenkins/view/djangoapps/newJob or
-  http://buildbot.lizardsystem.nl/jenkins/view/libraries/newJob . Job name
+- add a new jenkins job at
+  http://buildbot.lizardsystem.nl/jenkins/view/djangoapps/newjob or
+  http://buildbot.lizardsystem.nl/jenkins/view/libraries/newjob . job name
   should be "raster-tools", make the project a copy of the existing "lizard-wms"
-  project (for django apps) or "nensskel" (for libraries). On the next page,
+  project (for django apps) or "nensskel" (for libraries). on the next page,
   change the "github project" to ``https://github.com/nens/raster-tools/`` and
   "repository url" fields to ``git@github.com:nens/raster-tools.git`` (you might
-  need to replace "nens" with "lizardsystem"). The rest of the settings should
-  be OK.
+  need to replace "nens" with "lizardsystem"). the rest of the settings should
+  be ok.
 
-- The project is prepared to be translated with Lizard's
-  `Transifex <http://translations.lizard.net/>`_ server. For details about
+- the project is prepared to be translated with lizard's
+  `transifex <http://translations.lizard.net/>`_ server. for details about
   pushing translation files to and fetching translation files from the
-  Transifex server, see the ``nens/translations`` `documentation
-  <https://github.com/nens/translations/blob/master/README.rst>`_.
+  transifex server, see the ``nens/translations`` `documentation
+  <https://github.com/nens/translations/blob/master/readme.rst>`_.
