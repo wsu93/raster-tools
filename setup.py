@@ -10,6 +10,7 @@ long_description = '\n\n'.join([
 
 install_requires = [
     'gdal',
+    'h5py',
     'psycopg2',
     'scipy',
     'setuptools',
@@ -56,6 +57,8 @@ setup(name='raster-tools',
               'flow-acc           = raster_tools.flow.flow_acc:main',
               'flow-vec           = raster_tools.flow.flow_vec:main',
               'flow-rst           = raster_tools.flow.flow_rst:main',
+              # void filling
+              'fill-label         = raster_tools.fill.label:main',
               # modification
               'mfillnodata        = raster_tools.mfillnodata:main',
               'fillnodata         = raster_tools.fillnodata:main',
