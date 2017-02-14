@@ -79,14 +79,15 @@ class Group(object):
         If the bounds fall outside the dataset, the result is padded
         with no data values.
         """
-        # find indices
         if isinstance(bounds, ogr.Geometry):
-            x1, y1, x2, y2 = self.geo_transform.get_indices(bounds,
-                                                            inflate=inflate)
-        else:
-            x1, y1, x2, y2 = bounds
+            bounds = self.geo_transform.get_indices(bounds, inflate=inflate)
+        return self._read(bounds)
 
-        # overlapping bounds
+    def _read(self, bounds):
+        """ like read, but not accepting a geometry. """
+        x1, y1, x2, y2 = bounds
+
+        # find the bounds defining the overlap between request and data
         w, h = self.width, self.height
         p1 = min(w, max(0, x1))
         q1 = min(h, max(0, y1))
@@ -104,6 +105,17 @@ class Group(object):
             view[index] = data[index]
 
         return array
+
+    def __getitem__(self, slices):
+        """
+        Numpy style slice access in its simplest form. Only slices are
+        allowed, and no negative indices are to be referred.
+        """
+        # note gdal has a different order compared to numpy
+        s1, s2 = slices
+        bounds = s2.start, s1.start, s2.stop, s1.stop
+
+        return self._read(bounds)
 
 
 class RGBWrapper(object):
