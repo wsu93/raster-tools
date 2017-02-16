@@ -13,6 +13,9 @@ import os
 
 from osgeo import gdal
 from scipy import ndimage
+from scipy import sparse
+from scipy.sparse.csgraph import connected_components
+
 import numpy as np
 import h5py
 
@@ -107,16 +110,30 @@ def fillnodata(raster_path, label_path):
                             h5_label[:, 256::256].flatten()])
     strip = np.concatenate([h5_strip[256::256, :].flatten(),
                             h5_strip[:, 256::256].flatten()])
-    links = np.logical_and(label, strip)
-    label, strip = label[links], strip[links]
 
-    # now what.
-    return
+    # well, this needs some explanation
+    # first, make from, to pairs using zip
+    # second, filter, keeping only pairs that are both nonzero using all
+    # third, remove duplicates by making it into a set
+    # unzip using another zip with the set as positional arguments
+    indices = zip(*sorted(set(filter(all, zip(label, strip)))))
+    values = np.ones(len(indices[0]))
+    shape = offset + 1, offset + 1
+    csr = sparse.csr_matrix((values, indices), shape=shape)
+    components = connected_components(csr, directed=False)[1]
+    voids = np.arange(offset + 1)
+    minima = ndimage.minimum(voids, components, voids)
+    convert = minima[components]
 
     from pylab import show, imshow
-    imshow(h5_strip, interpolation='none')
+    test = h5_label[:]
+    imshow(test, interpolation='none')
     show()
-    label.close()
+    h5_strip[1790:1795,254:259]
+    h5_label[1790:1795,254:259]
+
+    import ipdb
+    ipdb.set_trace() 
 
 
 
