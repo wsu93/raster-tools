@@ -6,12 +6,14 @@ from __future__ import unicode_literals
 from __future__ import absolute_import
 from __future__ import division
 
+
+from math import ceil, floor
 import logging
-import math
 
 import numpy as np
 
-from raster_tools import ogr
+from osgeo import gdal
+from osgeo import ogr
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +148,7 @@ class GeoTransform(tuple):
         e, f, g, h = get_inverse(a, b, c, d)
 
         # apply to envelope corners
-        f_lo, f_hi = (math.floor, math.ceil) if inflate else (round, round)
+        f_lo, f_hi = (floor, ceil) if inflate else (round, round)
 
         X1 = int(f_lo(e * (x1 - p) + f * (y2 - q)))
         Y1 = int(f_lo(g * (x1 - p) + h * (y2 - q)))
@@ -179,3 +181,46 @@ class GeoTransform(tuple):
         """
         x1, y1, x2, y2 = self.get_indices(geometry)
         return {'xoff': x1, 'yoff': y1, 'xsize': x2 - x1, 'ysize': y2 - y1}
+
+
+class Partitioner(object):
+    def __init__(self, size, chunks):
+        """
+        A partitioner object to aid in partitioning of large arrays.
+
+        :param size: Size of the array that is processed
+        :param chunks: Maximum size of the chunks. Chunks at lower right
+            edges may be smaller.
+
+        :type size: 2-tuple
+        :type chunks: 2-tuple
+        """
+        self.size = size
+        self.chunks = chunks
+        self.total = ceil(size[0] / chunks[0]) * ceil(size[1] / chunks[1])
+
+    def __len__(self):
+        return self.total
+
+    def __iter__(self):
+        """
+        Return generator of (i1, j1, i2, j2) index tuples.
+
+        The returned indices can be used to process an array in chunks.
+        """
+        # init the progress indicator
+        gdal.TermProgress_nocb(0)
+
+        # offsets of the chunks into the raster
+        i1, j1 = np.ogrid[0:self.size[0]:self.chunks[0],
+                          0:self.size[1]:self.chunks[1]]
+
+        # stops per chunk, either offset plus chunksize, or size if at edge
+        i2, j2 = (np.minimum(i1 + self.chunks[0], self.size[0]),
+                  np.minimum(j1 + self.chunks[1], self.size[1]))
+
+        # use broadcasting to turn this into a generator of indices
+        zipped = zip(np.broadcast(i1, j1), np.broadcast(i2, j2))
+        for count, (lower, upper) in enumerate(zipped, 1):
+            yield lower + upper
+            gdal.TermProgress_nocb(count / self.total)
