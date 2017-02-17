@@ -29,7 +29,7 @@ DTYPE = 'u8'
 COMPRESSION = 'lzf'
 
 
-def fillnodata(raster_path, label_path):
+def label(raster_path, label_path):
     # raster init
     if isdir(raster_path):
         raster_datasets = [gdal.Open(join(raster_path, path))
@@ -116,6 +116,7 @@ def fillnodata(raster_path, label_path):
     partitioner = utils.Partitioner(size=shape, chunks=CHUNKS)
     for i1, j1, i2, j2 in partitioner:
         ds_final[i1:i2, j1:j2] = convert[ds_label[i1:i2, j1:j2]]
+    ds_final.attrs['maximum'] = offset
 
     h5_label.close()
     h5_final.close()
@@ -141,6 +142,6 @@ def get_parser():
 
 
 def main():
-    """ Call fillnodata with args from parser. """
+    """ Call label with args from parser. """
     kwargs = vars(get_parser().parse_args())
-    fillnodata(**kwargs)
+    label(**kwargs)

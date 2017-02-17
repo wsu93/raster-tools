@@ -27,30 +27,9 @@ Creating a seamless large-scale void-filled raster (deprecated)
 
 Procedure for filling completely filling internal nodata
 --------------------------------------------------------
-Step 1 2D: - Labeling voids, strip process the entire dataset. NL
-300KM = 300000 Process the whole dataset in big strips of 250K.  - Skip
-the big outside void.  - Keep last line to compare to first of next,
-create connection table - Iterate that, until all strips are connected,
-resulting in a reclassification array per strip.  - Revisit all tiles
-(no offset this time) using this reclassification array, does: Done.
+Available: fill-label. Script to make an almost arbitrary size array with void
+labels.
 
-
-Step 2, 3D: - find all edges using two-step method, 1px buffer per strip
-needed, storing them in separate dimensions
-
-
-- tilewise, find the minimum and maximum label (from labels, giving
-dimensions to aggregate and do the aggregation (we have already the
-functions!)  - Do not incorporate dimensions that are empty, but do
-save them.  - until the whole tile fits in a pixel - this may have to
-be adaptive if there are many dimensions, we can incorporate a smaller
-spatial. Ugh, no.
-
-
-- zooming back in on the voids, calculate the void values. Per tile,
-start with a single pixel. Well, collect a pixel from neighbouring tiles,
-too. Zoom in, smooth. Etc. At lowest level, paste from dimension where
-void is. Remove dimensions that are presto.
 
 creating streamlines
 --------------------

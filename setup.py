@@ -59,6 +59,7 @@ setup(name='raster-tools',
               'flow-rst           = raster_tools.flow.flow_rst:main',
               # void filling
               'fill-label         = raster_tools.fill.label:main',
+              'fill-aggregate     = raster_tools.fill.aggregate:main',
               # modification
               'mfillnodata        = raster_tools.mfillnodata:main',
               'fillnodata         = raster_tools.fillnodata:main',
