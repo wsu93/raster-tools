@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 # (c) Nelen & Schuurmans, see LICENSE.rst.
-""" Extract layers from a raster server using a geometry. """
+"""
+Extract layers from a raster server using a geometry.
+
+Main operation is to build and save a rudimentary 2D part for a 3Di model.
+Alternatively it is possible to extract from a single layer on the remote
+server.
+"""
 
 from __future__ import print_function
 from __future__ import unicode_literals
@@ -10,9 +16,7 @@ from __future__ import division
 import argparse
 import collections
 import csv
-import logging
 import os
-import sys
 import threading
 
 try:
@@ -34,14 +38,10 @@ from osgeo import gdalnumeric as np
 from osgeo import ogr
 from osgeo import osr
 
-logger = logging.getLogger(__name__)
-gdal.UseExceptions()
-ogr.UseExceptions()
-osr.UseExceptions()
 operations = {}
 
 # Version management for outdated warning
-VERSION = 20
+VERSION = 27
 
 GITHUB_URL = ('https://raw.github.com/nens/'
               'raster-tools/master/raster_tools/extract.py')
@@ -64,7 +64,7 @@ ATTRIBUTE = 'model'
 CELLSIZE = 0.5, 0.5
 DTYPE = 'f4'
 FLOOR = 0.15
-OPERATION = '3di'
+OPERATION = '3di-ahn2'
 PROJECTION = 'EPSG:28992'
 TIMESTAMP = '1970-01-01T00:00:00Z'
 SERVER = 'https://raster.lizard.net'
@@ -93,7 +93,7 @@ class Layers(Operation):
     def __init__(self, layers, dtype, fillvalue, time, **kwargs):
         """ Initialize the operation. """
         # self.layers = layers
-        self.outputs = [self.name]
+        self.outputs = {self.name: [self.name]}
         self.inputs = {self.name: {'layers': layers, 'time': time}}
 
         self.data_type = {self.name: DTYPES[dtype]}
@@ -126,10 +126,8 @@ class Layers(Operation):
         return {self.name: result}
 
 
-class ThreeDi(Operation):
+class ThreeDiBase(object):
     """ Extract all rasters for a 3Di model. """
-    name = '3di'
-
     # inputs
     I_SOIL = 'soil'
     I_LANDUSE = 'landuse'
@@ -177,17 +175,10 @@ class ThreeDi(Operation):
     required = set([y for x in outputs.values() for y in x])
 
     def __init__(self, floor, landuse, soil, time, **kwargs):
-        """ Initialize the operation. """
-        self.layers = {
-            self.I_BATHYMETRY: dict(layers=','.join([
-                'ahn2:int',
-                'dem:bag!{}'.format(floor),
-                'dem:water',
-            ])),
-            self.I_LANDUSE: dict(layers='cover:3di'),
-            self.I_SOIL: dict(layers='soil:3di'),
-        }
-
+        """
+        Initialize the operation. The subclasses have to set the layers
+        attribute.
+        """
         # create the inputs that will be loaded from the server
         self.inputs = {}
         for k in self.layers:
@@ -387,7 +378,7 @@ class ThreeDi(Operation):
     def _calculate_infiltration(self, datasets):
         # short keys
         s = self.I_SOIL
-        l = self.I_LANDUSE
+        c = self.I_LANDUSE
         o = self.O_INFILTRATION
         # create
         no_data_value = self.no_data_value[o]
@@ -404,7 +395,7 @@ class ThreeDi(Operation):
         # read and convert landuse
         l_conv = np.array([no_data_value if x is None else x
                            for x in self.landuse_tables['permeability']])
-        l_band = datasets[l].GetRasterBand(1)
+        l_band = datasets[c].GetRasterBand(1)
         l_data = l_conv[l_band.ReadAsArray()]
         l_mask = ~l_band.GetMaskBand().ReadAsArray().astype('b1')
         l_data[l_mask] = no_data_value
@@ -479,6 +470,83 @@ class ThreeDi(Operation):
         return {key: self.calculators[key](datasets) for key in self.outputs}
 
 
+class ThreeDiAHN2(Operation, ThreeDiBase):
+    name = '3di-ahn2'
+
+    def __init__(self, floor, **kwargs):
+        """ Initialize the operation. """
+        # first define the layers
+        self.layers = {
+            self.I_BATHYMETRY: dict(layers=','.join([
+                'intern:nl:ahn2:int',
+                'intern:nl:ahn2:bag!{}'.format(floor),
+                'dem:water',
+            ])),
+            self.I_LANDUSE: dict(layers='intern:nl:cover:phy-1801c'),
+            self.I_SOIL: dict(layers='soil:3di-1801c'),
+        }
+        # then let the base class handle the rest
+        super(ThreeDiAHN2, self).__init__(floor, **kwargs)
+
+
+class ThreeDiAHN3(Operation, ThreeDiBase):
+    name = '3di-ahn3'
+
+    def __init__(self, floor, **kwargs):
+        """ Initialize the operation. """
+        # first define the layers
+        self.layers = {
+            self.I_BATHYMETRY: dict(layers=','.join([
+                'intern:nl:ahn3:int-2018',
+                'intern:nl:ahn3:bag-2018!{}'.format(floor),
+                'dem:water',
+            ])),
+            self.I_LANDUSE: dict(layers='intern:nl:cover:phy-1801c'),
+            self.I_SOIL: dict(layers='soil:3di-1801c'),
+        }
+        # then let the base class handle the rest
+        super(ThreeDiAHN3, self).__init__(floor, **kwargs)
+
+
+class ThreeDiAHN3HHNK(Operation, ThreeDiBase):
+    name = '3di-ahn3-hhnk'
+
+    def __init__(self, floor, **kwargs):
+        """ Initialize the operation. """
+        template = 'Operation "{}" no longer exists. Use "3di-ahn3" instead.'
+        print(template.format(self.name))
+        exit()
+
+
+class ThreeDiAHN3Almere(Operation, ThreeDiBase):
+    name = '3di-ahn3-almere'
+
+    def __init__(self, floor, **kwargs):
+        """ Initialize the operation. """
+        template = 'Operation "{}" no longer exists. Use "3di-ahn3" instead.'
+        print(template.format(self.name))
+        exit()
+
+
+class ThreeDiRD(Operation, ThreeDiBase):
+    name = '3di-rd'
+
+    def __init__(self, floor, **kwargs):
+        """ Initialize the operation. """
+        # first define the layers
+        self.layers = {
+            self.I_BATHYMETRY: dict(layers=','.join([
+                'intern:nl:rd:int',
+                'intern:nl:rd:bag!{}'.format(floor),
+                'dem:water',
+            ])),
+            self.I_LANDUSE: dict(layers='intern:nl:cover:phy-1801c'),
+            self.I_SOIL: dict(layers='soil:3di-1801c'),
+        }
+        # then let the base class handle the rest
+        super(ThreeDiRD, self).__init__(floor, **kwargs)
+
+
 class Preparation(object):
     """
     Preparation.
@@ -538,7 +606,7 @@ class Preparation(object):
         return geometry
 
     def _create_dataset(self, name, path):
-        """ """
+        """ Prepare output tif dataset. """
         # dir
         try:
             os.makedirs(os.path.dirname(path))
@@ -565,6 +633,11 @@ class Preparation(object):
         dataset.GetRasterBand(1).SetNoDataValue(
             self.operation.no_data_value[name],
         )
+
+        # meta
+        meta = {n.upper(): self.operation.inputs[n]['layers']
+                for n in self.operation.outputs[name]}
+        dataset.SetMetadata(meta)
         return dataset
 
     def _get_or_create_datasets(self):
@@ -1011,9 +1084,7 @@ def get_parser():
 
 def main():
     """ Call command with args from parser. """
-    operations.update({cls.name: cls
-                       for cls in Operation.__subclasses__()})
-    logging.basicConfig(stream=sys.stderr, level=logging.DEBUG)
+    operations.update({cls.name: cls for cls in Operation.__subclasses__()})
     return command(**vars(get_parser().parse_args()))
 
 

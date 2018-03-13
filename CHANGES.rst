@@ -5,7 +5,27 @@ Changelog of raster-tools
 0.2 (unreleased)
 ----------------
 
+- Extended extract tool with 3di-ahn3 option.
+
+- Added meta about raster-server layers to extract tool.
+
 - Leanified and documented AHN3 downloader.
+
+- Extended extract tool with 3di-ahn3-hhnk option.
+
+- Extended extract tool with 3di-rd option.
+
+- Add difference script from the past.
+
+- Extended extract tool with 3Di-ahn3-almere option.
+
+- Added option to specify floor.
+
+- Enabled multiple source-files support in retile.
+
+- Add rasterize2 that keeps close to the sql.
+
+- Have extract script use new landuse sources.
 
 
 0.1 (2016-12-12)

@@ -37,6 +37,7 @@ class PostgisSource(object):
         'text': ogr.OFTString,
         'USER-DEFINED': ogr.OFTString,
         'character varying': ogr.OFTString,
+        'timestamp with time zone': ogr.OFTString,
         'timestamp without time zone': ogr.OFTString,
     }
 
@@ -117,7 +118,10 @@ class PostgisSource(object):
         _srid = self._get_srid(geometry)
         request = template.format(wkb, _srid, srid)
 
-        replace = 'ST_AsBinary(ST_Transform({}, {}))'.format(geom, _srid)
+        replace = 'ST_AsBinary(ST_Force2D(ST_Transform({}, {})))'.format(
+            geom,
+            _srid,
+        )
         columns = ','.join(column_names).replace(geom, replace)
 
         # get data
@@ -162,7 +166,13 @@ class PostgisSource(object):
         g = data['column_names'].index(geom)
         for r in data['records']:
             # geometry
-            geometry = ogr.CreateGeometryFromWkb(bytes(r[g]))
+            try:
+                geometry = ogr.CreateGeometryFromWkb(bytes(r[g]))
+            except RuntimeError:
+                # there were geometries giving trouble on trusty gdal
+                print('Skipping geometry:')
+                print(bytes(r[g]))
+                continue
             feature = ogr.Feature(layer_defn)
             feature.SetGeometry(geometry)
 

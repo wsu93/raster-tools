@@ -11,9 +11,8 @@ from __future__ import absolute_import
 from __future__ import division
 
 import argparse
-import logging
+import getpass
 import os
-import sys
 
 from raster_tools import gdal
 from raster_tools import ogr
@@ -23,42 +22,60 @@ import numpy as np
 
 from raster_tools import datasets
 from raster_tools import datasources
+from raster_tools import groups
 from raster_tools import postgis
-from raster_tools import utils
 
-DRIVER_GDAL_GTIFF = gdal.GetDriverByName(b'gtiff')
-DRIVER_GDAL_MEM = gdal.GetDriverByName(b'mem')
-DRIVER_OGR_MEM = ogr.GetDriverByName(b'memory')
+DRIVER_GDAL_GTIFF = gdal.GetDriverByName(str('gtiff'))
+DRIVER_GDAL_MEM = gdal.GetDriverByName(str('mem'))
+DRIVER_OGR_MEM = ogr.GetDriverByName(str('memory'))
 
 NO_DATA_VALUE = -3.4028234663852886e+38
-
-logger = logging.getLogger(__name__)
+CELLSIZE = 0.5
 
 
 class Rasterizer(object):
-    def __init__(self, raster_path, target_dir, table, **kwargs):
+    def __init__(self, table, raster_path, output_path, floor, **kwargs):
+        # postgis
         self.postgis_source = postgis.PostgisSource(**kwargs)
-        self.target_dir = target_dir
         self.table = table
 
-        self.dataset = gdal.Open(raster_path)
-        self.geo_transform = utils.GeoTransform(
-            self.dataset.GetGeoTransform()
-        )
-        self.projection = self.dataset.GetProjection()
-        self.sr = osr.SpatialReference(self.projection)
-        self.no_data_value = np.finfo('f4').min.item()
-        self.kwargs = {'projection': self.projection,
-                       'no_data_value': self.no_data_value}
+        # raster
+        if os.path.isdir(raster_path):
+            raster_datasets = [gdal.Open(os.path.join(raster_path, path))
+                               for path in sorted(os.listdir(raster_path))]
+        else:
+            raster_datasets = [gdal.Open(raster_path)]
+        self.raster_group = groups.Group(*raster_datasets)
+
+        # properties
+        self.projection = self.raster_group.projection
+        self.geo_transform = self.raster_group.geo_transform
+        self.no_data_value = self.raster_group.no_data_value.item()
+
+        self.kwargs = {
+            'projection': self.projection,
+            'no_data_value': self.no_data_value,
+        }
+
+        # output
+        self.output_path = output_path
+        self.floor = floor
+
+    @property
+    def sr(self):
+        return osr.SpatialReference(self.projection)
 
     def path(self, feature):
-        leaf = feature[b'bladnr']
-        return os.path.join(self.target_dir, leaf[0:3], leaf + '.tif')
+        leaf = feature[str('name')]
+        return os.path.join(self.output_path, leaf[0:3], leaf + '.tif')
 
     def target(self, feature):
         """ Return empty gdal dataset. """
         geometry = feature.geometry()
-        dataset = DRIVER_GDAL_MEM.Create('', 2000, 2500, 1, 6)
+        envelope = geometry.GetEnvelope()
+        width = int((envelope[1] - envelope[0]) / CELLSIZE)
+        height = int((envelope[3] - envelope[2]) / CELLSIZE)
+        dataset = DRIVER_GDAL_MEM.Create('', width, height, 1, 6)
         dataset.SetGeoTransform(self.geo_transform.shifted(geometry))
         dataset.SetProjection(self.projection)
         band = dataset.GetRasterBand(1)
@@ -69,7 +86,7 @@ class Rasterizer(object):
     def get_ogr_data_source(self, geometry):
         """ Return geometry wrapped as ogr data source. """
         data_source = DRIVER_OGR_MEM.CreateDataSource('')
-        layer = data_source.CreateLayer(b'', self.sr)
+        layer = data_source.CreateLayer(str(''), self.sr)
         layer_defn = layer.GetLayerDefn()
         feature = ogr.Feature(layer_defn)
         feature.SetGeometry(geometry)
@@ -87,14 +104,13 @@ class Rasterizer(object):
             geometry_buffer = geometry.Buffer(1).Difference(geometry)
         except RuntimeError:
             # garbage geometry
-            return
+            return False
 
-        # retrieve raster data
+        # read raster data
         geo_transform = self.geo_transform.shifted(geometry_buffer)
-        window = self.geo_transform.get_window(geometry_buffer)
-        data = self.dataset.ReadAsArray(**window)
-        if data is None:
-            return
+        data = self.raster_group.read(geometry_buffer)
+        if (data == self.no_data_value).all():
+            return False
         data.shape = (1,) + data.shape
 
         # create ogr data sources with geometry and buffer
@@ -112,10 +128,13 @@ class Rasterizer(object):
         # rasterize the percentile
         try:
             burn = np.percentile(data[mask.nonzero()], 75)
+            if self.floor:
+                burn += self.floor
         except IndexError:
             # no data points at all
-            return
+            return False
         gdal.RasterizeLayer(target, [1], data_source[0], burn_values=[burn])
+        return True
 
     def rasterize(self, index_feature):
         # prepare or abort
@@ -123,11 +142,7 @@ class Rasterizer(object):
         if os.path.exists(path):
             return
 
-        try:
-            os.makedirs(os.path.dirname(path))
-        except OSError:
-            pass
-
+        # target array
         target = self.target(index_feature)
 
         # fetch geometries from postgis
@@ -135,15 +150,24 @@ class Rasterizer(object):
             table=self.table, geometry=index_feature.geometry(),
         )
         # analyze and rasterize
+        burned = False
         for bag_feature in data_source[0]:
-            self.single(feature=bag_feature, target=target)
+            burned = self.single(feature=bag_feature, target=target)
+        if not burned:
+            return
+
         # save
+        try:
+            os.makedirs(os.path.dirname(path))
+        except OSError:
+            pass
+
         DRIVER_GDAL_GTIFF.CreateCopy(path,
                                      target,
                                      options=['compress=deflate'])
 
 
-def command(index_path, part, **kwargs):
+def bag2tif(index_path, part, **kwargs):
     """ Rasterize some postgis tables. """
     index = datasources.PartialDataSource(index_path)
     rasterizer = Rasterizer(**kwargs)
@@ -170,11 +194,11 @@ def get_parser():
                         help='Table name, including schema (e.g. public.bag)')
     parser.add_argument('raster_path', metavar='RASTER',
                         help='Path to the raster file')
-    parser.add_argument('target_dir', metavar='TARGET',
-                        help='Target folder for result files')
+    parser.add_argument('output_path', metavar='OUTPUT',
+                        help='Output folder for result files')
     parser.add_argument('-s', '--host', default='localhost')
+    parser.add_argument('-f', '--floor', default=None, type=float)
     parser.add_argument('-u', '--user'),
-    parser.add_argument('-p', '--password'),
     parser.add_argument('--part',
                         help='Partial processing source, for example "2/3"')
     return parser
@@ -182,15 +206,6 @@ def get_parser():
 
 def main():
     """ Call command with args from parser. """
-    logging.basicConfig(stream=sys.stderr,
-                        level=logging.DEBUG,
-                        format='%(message)s')
-    try:
-        return command(**vars(get_parser().parse_args()))
-    except SystemExit:
-        raise  # argparse does this
-    except:
-        logger.exception('An exception has occurred.')
-
-if __name__ == "__main__":
-    main()
+    kwargs = vars(get_parser().parse_args())
+    kwargs['password'] = getpass.getpass()
+    bag2tif(**kwargs)
